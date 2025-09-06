@@ -188,6 +188,10 @@ type Element interface {
 
 	// Element manipulation methods from Living Standard (applicable to XML)
 	ToggleAttribute(name DOMString, force ...bool) bool
+
+	// Position returns the source position information (line, column, offset)
+	// Returns (0, 0, 0) if position information is not available
+	Position() (line, column int, offset int64)
 	Remove()
 	ReplaceWith(nodes ...Node) error
 	Before(nodes ...Node) error
@@ -591,6 +595,11 @@ type node struct {
 	namespaceURI    DOMString
 	prefix          DOMString
 	localName       DOMString
+
+	// Source position information (set during parsing, 0 if not available)
+	sourceLineNumber   int
+	sourceColumnNumber int
+	sourceByteOffset   int64
 }
 
 func (n *node) NodeType() uint16 {
@@ -4434,6 +4443,12 @@ func (e *element) ChildElementCount() uint32 {
 		child = child.NextSibling()
 	}
 	return count
+}
+
+// Position returns the source position information (line, column, offset)
+// Returns (0, 0, 0) if position information is not available
+func (e *element) Position() (line, column int, offset int64) {
+	return e.sourceLineNumber, e.sourceColumnNumber, e.sourceByteOffset
 }
 
 // ===========================================================================

@@ -1,6 +1,7 @@
 package xmldom
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -8,6 +9,11 @@ import (
 
 	"golang.org/x/text/encoding/ianaindex"
 )
+
+// NewDecoderFromBytes creates a new Decoder from a byte slice, enabling position tracking
+func NewDecoderFromBytes(data []byte) *Decoder {
+	return NewDecoder(bytes.NewReader(data))
+}
 
 // Decoder is a struct that decodes a DOM tree from an XML input stream.
 //
@@ -34,6 +40,9 @@ import (
 type Decoder struct {
 	d             *xml.Decoder
 	bufferedToken xml.Token
+
+	// Position tracking
+	sourceText []byte // Original source text for line/column calculation
 }
 
 // DecoderOptions allows specifying decoder options.
@@ -74,9 +83,21 @@ func NewDecoderWithOptions(r io.Reader, opts *DecoderOptions) *Decoder {
 		}
 	}
 
-	return &Decoder{
+	decoder := &Decoder{
 		d: d,
 	}
+
+	// Try to capture source text for position tracking
+	if bytesReader, ok := r.(*bytes.Reader); ok {
+		// For bytes.Reader, we can capture the entire source
+		pos, _ := bytesReader.Seek(0, io.SeekCurrent)
+		bytesReader.Seek(0, io.SeekStart)
+		sourceText, _ := io.ReadAll(bytesReader)
+		bytesReader.Seek(pos, io.SeekStart)
+		decoder.sourceText = sourceText
+	}
+
+	return decoder
 }
 
 // NewDecoder creates a new Decoder that reads from the given io.Reader
@@ -123,6 +144,27 @@ func isValidXMLChar(r rune) bool {
 		(r >= 0x10000 && r <= 0x10FFFF)
 }
 
+// calculateLineColumn calculates the line and column number for a given byte offset
+func (d *Decoder) calculateLineColumn(offset int64) (line, column int) {
+	if len(d.sourceText) == 0 || offset < 0 || int64(len(d.sourceText)) <= offset {
+		return 0, 0
+	}
+
+	line = 1
+	column = 1
+
+	for i := int64(0); i < offset; i++ {
+		if d.sourceText[i] == '\n' {
+			line++
+			column = 1
+		} else {
+			column++
+		}
+	}
+
+	return line, column
+}
+
 // Decode reads the XML from the input stream and returns a Document.
 //
 // See the Decoder struct documentation for important notes about CDATA sections.
@@ -158,6 +200,15 @@ func (d *Decoder) Decode() (Document, error) {
 			elem, err := doc.CreateElementNS(DOMString(t.Name.Space), DOMString(t.Name.Local))
 			if err != nil {
 				return nil, &ParsingError{Err: err}
+			}
+
+			// Store position information
+			if elemImpl, ok := elem.(*element); ok {
+				offset := d.d.InputOffset()
+				line, col := d.calculateLineColumn(offset)
+				elemImpl.sourceLineNumber = line
+				elemImpl.sourceColumnNumber = col
+				elemImpl.sourceByteOffset = offset
 			}
 
 			// Copy attributes with namespace validation
