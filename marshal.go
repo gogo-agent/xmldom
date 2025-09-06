@@ -77,7 +77,11 @@ func serializeElement(buf *bytes.Buffer, elem Element, skipRoot bool) error {
 		// Check if element has children
 		hasChildren := elem.HasChildNodes()
 		if !hasChildren {
-			buf.WriteString("/>")
+			// For SCXML conformance, always use explicit opening/closing tags
+			// instead of self-closing tags for empty elements
+			buf.WriteString("></")
+			buf.WriteString(string(elem.TagName()))
+			buf.WriteString(">")
 			return nil
 		}
 
@@ -134,7 +138,7 @@ func serializeNode(buf *bytes.Buffer, node Node) error {
 			}
 			buf.WriteString("?>")
 		}
-	// Skip other node types for now
+		// Skip other node types for now
 	}
 	return nil
 }

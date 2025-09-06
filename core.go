@@ -14,54 +14,62 @@ import (
 // boundary. This is a documented deviation from the specification.
 type DOMString string
 
+type NodeType = uint16
+
 // DOM node type constants
 const (
-	ELEMENT_NODE                uint16 = 1
-	ATTRIBUTE_NODE              uint16 = 2
-	TEXT_NODE                   uint16 = 3
-	CDATA_SECTION_NODE          uint16 = 4
-	ENTITY_REFERENCE_NODE       uint16 = 5
-	ENTITY_NODE                 uint16 = 6
-	PROCESSING_INSTRUCTION_NODE uint16 = 7
-	COMMENT_NODE                uint16 = 8
-	DOCUMENT_NODE               uint16 = 9
-	DOCUMENT_TYPE_NODE          uint16 = 10
-	DOCUMENT_FRAGMENT_NODE      uint16 = 11
-	NOTATION_NODE               uint16 = 12
+	ELEMENT_NODE                NodeType = 1
+	ATTRIBUTE_NODE              NodeType = 2
+	TEXT_NODE                   NodeType = 3
+	CDATA_SECTION_NODE          NodeType = 4
+	ENTITY_REFERENCE_NODE       NodeType = 5
+	ENTITY_NODE                 NodeType = 6
+	PROCESSING_INSTRUCTION_NODE NodeType = 7
+	COMMENT_NODE                NodeType = 8
+	DOCUMENT_NODE               NodeType = 9
+	DOCUMENT_TYPE_NODE          NodeType = 10
+	DOCUMENT_FRAGMENT_NODE      NodeType = 11
+	NOTATION_NODE               NodeType = 12
 )
+
+type DocumentPositionType = uint16
 
 // DocumentPosition constants
 const (
-	DOCUMENT_POSITION_DISCONNECTED            uint16 = 0x01
-	DOCUMENT_POSITION_PRECEDING               uint16 = 0x02
-	DOCUMENT_POSITION_FOLLOWING               uint16 = 0x04
-	DOCUMENT_POSITION_CONTAINS                uint16 = 0x08
-	DOCUMENT_POSITION_CONTAINED_BY            uint16 = 0x10
-	DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC uint16 = 0x20
+	DOCUMENT_POSITION_DISCONNECTED            DocumentPositionType = 0x01
+	DOCUMENT_POSITION_PRECEDING               DocumentPositionType = 0x02
+	DOCUMENT_POSITION_FOLLOWING               DocumentPositionType = 0x04
+	DOCUMENT_POSITION_CONTAINS                DocumentPositionType = 0x08
+	DOCUMENT_POSITION_CONTAINED_BY            DocumentPositionType = 0x10
+	DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC DocumentPositionType = 0x20
 )
+
+type NodeFilterType = uint16
 
 // NodeFilter constants
 const (
-	FILTER_ACCEPT uint16 = 1
-	FILTER_REJECT uint16 = 2
-	FILTER_SKIP   uint16 = 3
+	FILTER_ACCEPT NodeFilterType = 1
+	FILTER_REJECT NodeFilterType = 2
+	FILTER_SKIP   NodeFilterType = 3
 )
+
+type ShowWhatType = uint32
 
 // NodeIterator/TreeWalker whatToShow constants
 const (
-	SHOW_ALL                    uint32 = 0xFFFFFFFF
-	SHOW_ELEMENT                uint32 = 0x00000001
-	SHOW_ATTRIBUTE              uint32 = 0x00000002
-	SHOW_TEXT                   uint32 = 0x00000004
-	SHOW_CDATA_SECTION          uint32 = 0x00000008
-	SHOW_ENTITY_REFERENCE       uint32 = 0x00000010
-	SHOW_ENTITY                 uint32 = 0x00000020
-	SHOW_PROCESSING_INSTRUCTION uint32 = 0x00000040
-	SHOW_COMMENT                uint32 = 0x00000080
-	SHOW_DOCUMENT               uint32 = 0x00000100
-	SHOW_DOCUMENT_TYPE          uint32 = 0x00000200
-	SHOW_DOCUMENT_FRAGMENT      uint32 = 0x00000400
-	SHOW_NOTATION               uint32 = 0x00000800
+	SHOW_ALL                    ShowWhatType = 0xFFFFFFFF
+	SHOW_ELEMENT                ShowWhatType = 0x00000001
+	SHOW_ATTRIBUTE              ShowWhatType = 0x00000002
+	SHOW_TEXT                   ShowWhatType = 0x00000004
+	SHOW_CDATA_SECTION          ShowWhatType = 0x00000008
+	SHOW_ENTITY_REFERENCE       ShowWhatType = 0x00000010
+	SHOW_ENTITY                 ShowWhatType = 0x00000020
+	SHOW_PROCESSING_INSTRUCTION ShowWhatType = 0x00000040
+	SHOW_COMMENT                ShowWhatType = 0x00000080
+	SHOW_DOCUMENT               ShowWhatType = 0x00000100
+	SHOW_DOCUMENT_TYPE          ShowWhatType = 0x00000200
+	SHOW_DOCUMENT_FRAGMENT      ShowWhatType = 0x00000400
+	SHOW_NOTATION               ShowWhatType = 0x00000800
 )
 
 // NodeFilter interface
@@ -77,7 +85,7 @@ type NodeFilter interface {
 
 // Node interface represents a node in the DOM tree
 type Node interface {
-	NodeType() uint16
+	NodeType() NodeType
 	NodeName() DOMString
 	NodeValue() DOMString
 	SetNodeValue(value DOMString) error
@@ -104,7 +112,7 @@ type Node interface {
 	HasAttributes() bool
 	BaseURI() DOMString
 	IsConnected() bool
-	CompareDocumentPosition(otherNode Node) uint16
+	CompareDocumentPosition(otherNode Node) DocumentPositionType
 	Contains(otherNode Node) bool
 	GetRootNode() Node
 	IsDefaultNamespace(namespaceURI DOMString) bool
@@ -137,8 +145,8 @@ type Document interface {
 	GetElementsByTagNameNS(namespaceURI, localName DOMString) NodeList
 	GetElementById(elementId DOMString) Element
 	AdoptNode(source Node) (Node, error)
-	CreateNodeIterator(root Node, whatToShow uint32, filter NodeFilter) (NodeIterator, error)
-	CreateTreeWalker(root Node, whatToShow uint32, filter NodeFilter) (TreeWalker, error)
+	CreateNodeIterator(root Node, whatToShow ShowWhatType, filter NodeFilter) (NodeIterator, error)
+	CreateTreeWalker(root Node, whatToShow ShowWhatType, filter NodeFilter) (TreeWalker, error)
 	CreateRange() Range
 	NormalizeDocument()
 	RenameNode(node Node, namespaceURI, qualifiedName DOMString) (Node, error)
@@ -385,8 +393,6 @@ type ElementList interface {
 	Length() uint
 	Item(index uint) Element
 }
-
-
 
 // ===========================================================================
 // Core Implementation Types
@@ -1621,14 +1627,14 @@ func (d *document) InsertBefore(newChild Node, refChild Node) (Node, error) {
 	if nc := getInternalNode(newChild); nc != nil {
 		nc.parentNode = d
 	}
-	
+
 	// Set as document element if this is the first element child and no document element is set
 	if newChild.NodeType() == ELEMENT_NODE && d.documentElement == nil {
 		if elem, ok := newChild.(Element); ok {
 			d.documentElement = elem
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -1882,12 +1888,12 @@ func (d *document) CreateElementNS(namespaceURI, qualifiedName DOMString) (Eleme
 	if !IsValidName(qualifiedName) {
 		return nil, NewDOMException("InvalidCharacterError", "Invalid character in element qualified name")
 	}
-	
+
 	// Reject reserved namespace URIs
 	if namespaceURI == "http://www.w3.org/2000/xmlns/" || namespaceURI == "http://www.w3.org/XML/1998/namespace" {
 		return nil, NewDOMException("NamespaceError", "Reserved namespace URI")
 	}
-	
+
 	prefix, localName := parseQualifiedName(qualifiedName)
 	return &element{
 		node: node{
@@ -2823,7 +2829,7 @@ func (r *domRange) IsPointInRange(node Node, offset uint32) (bool, error) {
 	if r.detached {
 		return false, NewDOMException("InvalidStateError", "Range is detached")
 	}
-	
+
 	if node == nil {
 		return false, NewDOMException("InvalidNodeTypeError", "Node cannot be null")
 	}
@@ -2933,7 +2939,7 @@ func (r *domRange) comparePositions(node1 Node, offset1 uint32, node2 Node, offs
 
 	// Handle container relationships according to DOM Range spec
 	position := node1.CompareDocumentPosition(node2)
-	
+
 	// If node1 contains node2
 	if position&DOCUMENT_POSITION_CONTAINS != 0 {
 		// node1 contains node2, so we need to find which child of node1 contains node2
@@ -2950,14 +2956,14 @@ func (r *domRange) comparePositions(node1 Node, offset1 uint32, node2 Node, offs
 				if offset1 <= childIndex {
 					return -1 // position is before this child
 				} else {
-					return 1  // position is after this child
+					return 1 // position is after this child
 				}
 			}
 			childIndex++
 		}
 		return 1 // shouldn't reach here in a well-formed DOM
 	}
-	
+
 	// If node2 contains node1
 	if position&DOCUMENT_POSITION_CONTAINED_BY != 0 {
 		// node2 contains node1, so we need to find which child of node2 contains node1
@@ -2972,7 +2978,7 @@ func (r *domRange) comparePositions(node1 Node, offset1 uint32, node2 Node, offs
 					return 0 // equivalent positions
 				}
 				if offset2 <= childIndex {
-					return 1  // position is after this child
+					return 1 // position is after this child
 				} else {
 					return -1 // position is before this child
 				}
@@ -2981,12 +2987,12 @@ func (r *domRange) comparePositions(node1 Node, offset1 uint32, node2 Node, offs
 		}
 		return -1 // shouldn't reach here in a well-formed DOM
 	}
-	
+
 	// Neither contains the other - use document order
 	if position&DOCUMENT_POSITION_FOLLOWING != 0 {
 		return -1 // node1 is before node2
 	} else if position&DOCUMENT_POSITION_PRECEDING != 0 {
-		return 1  // node1 is after node2
+		return 1 // node1 is after node2
 	}
 
 	return 0
@@ -3186,16 +3192,27 @@ func (d *document) ContentType() DOMString {
 func (d *document) CreateExpression(expression string, resolver XPathNSResolver) (XPathExpression, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	
+
 	if expression == "" {
 		return nil, NewXPathException("INVALID_EXPRESSION_ERR", "Expression cannot be empty")
 	}
 
-	// Parse the XPath expression into AST
-	parser := NewXPathParser()
-	ast, err := parser.Parse(expression)
-	if err != nil {
-		return nil, err
+	// Check cache first
+	var ast XPathNode
+	var err error
+
+	if cachedAst, found := getCachedExpression(expression); found {
+		ast = cachedAst
+	} else {
+		// Parse the XPath expression into AST
+		parser := NewXPathParser()
+		ast, err = parser.Parse(expression)
+		if err != nil {
+			return nil, err
+		}
+
+		// Store in cache for future use
+		setCachedExpression(expression, ast)
 	}
 
 	// Create compiled expression
@@ -3215,11 +3232,11 @@ func (d *document) CreateNSResolver(nodeResolver Node) Node {
 }
 
 // Evaluate evaluates an XPath expression on a context node
-func (d *document) Evaluate(expression string, contextNode Node, resolver XPathNSResolver, 
+func (d *document) Evaluate(expression string, contextNode Node, resolver XPathNSResolver,
 	resultType uint16, result XPathResult) (XPathResult, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	
+
 	if expression == "" {
 		return nil, NewXPathException("INVALID_EXPRESSION_ERR", "Expression cannot be empty")
 	}
@@ -3863,12 +3880,12 @@ func (e *element) RemoveAttributeNode(oldAttr Attr) (Attr, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Nullify the ownerElement of the removed attribute
 	if removedAttr, ok := removedNode.(*attr); ok {
 		removedAttr.ownerElement = nil
 	}
-	
+
 	if doc := e.OwnerDocument(); doc != nil {
 		if d, ok := doc.(*document); ok {
 			d.notifyMutation()
@@ -5462,4 +5479,3 @@ func parseQualifiedName(qualifiedName DOMString) (prefix, localName DOMString) {
 	}
 	return "", qualifiedName
 }
-

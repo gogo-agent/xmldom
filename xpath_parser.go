@@ -17,31 +17,32 @@ type XPathTokenType int
 
 const (
 	// Literals and identifiers
-	TokenName        XPathTokenType = iota // element names, attribute names, function names
-	TokenString                            // string literals like "hello"
-	TokenNumber                            // numeric literals like 123 or 45.67
-	TokenAxis                              // axis specifiers like "child::", "descendant::"
+	TokenName     XPathTokenType = iota // element names, attribute names, function names
+	TokenString                         // string literals like "hello"
+	TokenNumber                         // numeric literals like 123 or 45.67
+	TokenVariable                       // variable references like $foo
+	TokenAxis                           // axis specifiers like "child::", "descendant::"
 
 	// Operators
-	TokenSlash        // /
-	TokenDoubleSlash  // //
-	TokenDot          // .
-	TokenDoubleDot    // ..
-	TokenAt           // @
-	TokenPipe         // |
-	TokenPlus         // +
-	TokenMinus        // -
-	TokenStar         // *
-	TokenMod          // mod
-	TokenDiv          // div
-	TokenAnd          // and
-	TokenOr           // or
-	TokenEq           // =
-	TokenNeq          // !=
-	TokenLt           // <
-	TokenLte          // <=
-	TokenGt           // >
-	TokenGte          // >=
+	TokenSlash       // /
+	TokenDoubleSlash // //
+	TokenDot         // .
+	TokenDoubleDot   // ..
+	TokenAt          // @
+	TokenPipe        // |
+	TokenPlus        // +
+	TokenMinus       // -
+	TokenStar        // *
+	TokenMod         // mod
+	TokenDiv         // div
+	TokenAnd         // and
+	TokenOr          // or
+	TokenEq          // =
+	TokenNeq         // !=
+	TokenLt          // <
+	TokenLte         // <=
+	TokenGt          // >
+	TokenGte         // >=
 
 	// Delimiters
 	TokenLeftParen    // (
@@ -53,8 +54,8 @@ const (
 	TokenDoubleColon  // ::
 
 	// Special
-	TokenEOF    // End of input
-	TokenError  // Error token
+	TokenEOF   // End of input
+	TokenError // Error token
 )
 
 // XPathToken represents a single token in an XPath expression
@@ -85,6 +86,8 @@ func tokenTypeName(t XPathTokenType) string {
 		return "STRING"
 	case TokenNumber:
 		return "NUMBER"
+	case TokenVariable:
+		return "VARIABLE"
 	case TokenAxis:
 		return "AXIS"
 	case TokenSlash:
@@ -147,9 +150,9 @@ func tokenTypeName(t XPathTokenType) string {
 // XPathLexer tokenizes XPath expressions
 type XPathLexer struct {
 	input    string
-	position int  // Current position in input
-	start    int  // Start position of current token
-	width    int  // Width of last rune read
+	position int             // Current position in input
+	start    int             // Start position of current token
+	width    int             // Width of last rune read
 	tokens   chan XPathToken // Channel of scanned tokens
 }
 
@@ -196,6 +199,8 @@ func (l *XPathLexer) lexText() bool {
 			return l.lexDot()
 		case r == '@':
 			l.emit(TokenAt)
+		case r == '$':
+			return l.lexVariable()
 		case r == '|':
 			l.emit(TokenPipe)
 		case r == '+':
@@ -256,6 +261,28 @@ func (l *XPathLexer) lexDot() bool {
 	} else {
 		l.emit(TokenDot)
 	}
+	return false
+}
+
+// lexVariable handles variable references like $foo, $bar
+func (l *XPathLexer) lexVariable() bool {
+	// Consume the variable name (must start with a letter or underscore)
+	r := l.peek()
+	if !isNameStartChar(r) {
+		l.errorf("expected variable name after $")
+		return true
+	}
+
+	// Consume all name characters
+	for {
+		r := l.peek()
+		if !isNameChar(r) {
+			break
+		}
+		l.next()
+	}
+
+	l.emit(TokenVariable)
 	return false
 }
 
@@ -362,7 +389,7 @@ func (l *XPathLexer) lexName() bool {
 		// Emit just the axis name with ::
 		l.next() // consume first :
 		l.next() // consume second :
-		l.emitValue(TokenAxis, name+"::") 
+		l.emitValue(TokenAxis, name+"::")
 		return false
 	}
 
@@ -544,8 +571,8 @@ func (p *XPathParser) consume(tokenType XPathTokenType, message string) error {
 
 // error creates a parsing error
 func (p *XPathParser) error(message string) *XPathError {
-	return NewXPathError(XPathErrorTypeSyntax, 
-		fmt.Sprintf("Parse error at position %d: %s", p.current.Position, message), 
+	return NewXPathError(XPathErrorTypeSyntax,
+		fmt.Sprintf("Parse error at position %d: %s", p.current.Position, message),
 		p.current.Position)
 }
 
@@ -780,7 +807,11 @@ func (p *XPathParser) parsePathExpr() (XPathNode, error) {
 		if nextToken.Type == TokenLeftParen {
 			// This is a function call, put the paren back and parse as primary expr
 			p.peek = &nextToken
-			return p.parsePrimaryExpr()
+			primaryExpr, err := p.parsePrimaryExpr()
+			if err != nil {
+				return nil, err
+			}
+			return p.tryParsePathContinuation(primaryExpr)
 		} else {
 			// Not a function call, put the token back and parse as location path
 			p.peek = &nextToken
@@ -789,13 +820,60 @@ func (p *XPathParser) parsePathExpr() (XPathNode, error) {
 	}
 
 	// Try to parse as location path first
-	if p.check(TokenSlash) || p.check(TokenDoubleSlash) || p.check(TokenDot) || p.check(TokenDoubleDot) || 
-	   p.check(TokenAt) || p.check(TokenAxis) {
+	if p.check(TokenSlash) || p.check(TokenDoubleSlash) || p.check(TokenDot) || p.check(TokenDoubleDot) ||
+		p.check(TokenAt) || p.check(TokenAxis) {
 		return p.parseLocationPath()
 	}
 
-	// Otherwise, parse as primary expression (number, string, literals, etc.)
-	return p.parsePrimaryExpr()
+	// Otherwise, parse as primary expression and check for path continuation
+	primaryExpr, err := p.parsePrimaryExpr()
+	if err != nil {
+		return nil, err
+	}
+
+	return p.tryParsePathContinuation(primaryExpr)
+}
+
+// tryParsePathContinuation checks if a primary expression is followed by path operators
+func (p *XPathParser) tryParsePathContinuation(primaryExpr XPathNode) (XPathNode, error) {
+	// Check if there's a path continuation
+	if p.check(TokenSlash) || p.check(TokenDoubleSlash) {
+		// This is a FilterExpr followed by path operators
+		var steps []XPathNode
+
+		// Add the primary expression as the first "step"
+		steps = append(steps, primaryExpr)
+
+		// Parse the path continuation
+		for p.check(TokenSlash) || p.check(TokenDoubleSlash) {
+			if p.match(TokenSlash) {
+				// Parse the next step
+				step, err := p.parseStep()
+				if err != nil {
+					return nil, err
+				}
+				steps = append(steps, step)
+			} else if p.match(TokenDoubleSlash) {
+				// Add descendant-or-self step
+				steps = append(steps, &xpathAxisNode{
+					axis:     XPathAxisDescendantOrSelf,
+					nodeTest: &xpathNodeTest{name: "*", nodeType: "node()"},
+				})
+
+				// Parse the next step
+				step, err := p.parseStep()
+				if err != nil {
+					return nil, err
+				}
+				steps = append(steps, step)
+			}
+		}
+
+		return &xpathPathNode{steps: steps}, nil
+	}
+
+	// No path continuation, just return the primary expression
+	return primaryExpr, nil
 }
 
 // parseLocationPath: RelativeLocationPath | AbsoluteLocationPath
@@ -806,7 +884,7 @@ func (p *XPathParser) parseLocationPath() (XPathNode, error) {
 	if p.match(TokenSlash) {
 		// Root step
 		steps = append(steps, &xpathRootNode{})
-		
+
 		// Check if there are more steps
 		if p.isLocationStep() {
 			relativeSteps, err := p.parseRelativeLocationPath()
@@ -826,7 +904,7 @@ func (p *XPathParser) parseLocationPath() (XPathNode, error) {
 			axis:     XPathAxisDescendantOrSelf,
 			nodeTest: &xpathNodeTest{name: "*", nodeType: "node()"},
 		})
-		
+
 		// Parse remaining steps
 		relativeSteps, err := p.parseRelativeLocationPath()
 		if err != nil {
@@ -923,6 +1001,13 @@ func (p *XPathParser) parseStep() (XPathNode, error) {
 				concreteTest.nodeType = "attribute"
 			}
 		}
+	} else if axis == XPathAxisNamespace {
+		// For namespace axis, the node test should match namespace nodes
+		if concreteTest, ok := nodeTest.(*xpathNodeTest); ok {
+			if concreteTest.nodeType == "element" {
+				concreteTest.nodeType = "namespace"
+			}
+		}
 	}
 
 	// Parse predicates
@@ -952,7 +1037,8 @@ func (p *XPathParser) parseNodeTest() (XPathNodeTest, error) {
 			if err := p.consume(TokenRightParen, "expected ')' after node test"); err != nil {
 				return nil, err
 			}
-			return &xpathNodeTest{name: name, nodeType: name}, nil
+			// Normalize to canonical nodeType with parentheses so evaluator matches (e.g., "text()")
+			return &xpathNodeTest{name: name + "()", nodeType: name + "()"}, nil
 		}
 
 		// Regular name test
@@ -1014,6 +1100,18 @@ func (p *XPathParser) parsePrimaryExpr() (XPathNode, error) {
 		}
 		return &xpathLiteralNode{
 			value: NewXPathNumberValue(num),
+		}, nil
+	}
+
+	// Variable reference
+	if p.match(TokenVariable) {
+		// Strip the $ prefix from the variable name
+		varName := p.previous.Value
+		if len(varName) > 0 && varName[0] == '$' {
+			varName = varName[1:]
+		}
+		return &xpathVariableNode{
+			name: varName,
 		}, nil
 	}
 
@@ -1114,7 +1212,7 @@ func parseAxisName(name string) XPathAxis {
 }
 
 // ===========================================================================
-// Parser-specific AST Node Types  
+// Parser-specific AST Node Types
 // ===========================================================================
 
 // xpathNodeTest represents node tests in steps
@@ -1140,7 +1238,7 @@ func (nt *xpathNodeTest) Matches(node Node, ctx *XPathContext) bool {
 		if nt.name == "*" {
 			return true
 		}
-		return string(node.NodeName()) == nt.name
+		return nt.matchesElementName(node, ctx)
 	case "attribute":
 		if node.NodeType() != ATTRIBUTE_NODE {
 			return false
@@ -1148,10 +1246,170 @@ func (nt *xpathNodeTest) Matches(node Node, ctx *XPathContext) bool {
 		if nt.name == "*" {
 			return true
 		}
+		return nt.matchesAttributeName(node, ctx)
+	case "namespace":
+		// Special handling for namespace nodes (NodeType 13)
+		if node.NodeType() != 13 { // Custom namespace node type
+			return false
+		}
+		if nt.name == "*" {
+			return true
+		}
+		// Match specific namespace prefix
 		return string(node.NodeName()) == nt.name
+	case "*":
+		// Wildcard matches any element or attribute (but not namespace nodes)
+		nodeType := node.NodeType()
+		return nodeType == ELEMENT_NODE || nodeType == ATTRIBUTE_NODE
 	default:
+		// Handle qualified names like "prefix:localname"
+		if strings.Contains(nt.nodeType, ":") {
+			return nt.matchesQualifiedName(node, ctx)
+		}
 		return false
 	}
+}
+
+// matchesElementName handles element name matching with namespace support
+func (nt *xpathNodeTest) matchesElementName(node Node, ctx *XPathContext) bool {
+	if node.NodeType() != ELEMENT_NODE {
+		return false
+	}
+
+	elementName := string(node.NodeName())
+	testName := nt.name
+
+	// Handle unqualified names
+	if !strings.Contains(testName, ":") {
+		// Simple name match
+		if elementName == testName || testName == "*" {
+			return true
+		}
+		// Check local name if namespaces are involved
+		if strings.Contains(elementName, ":") {
+			localName := elementName[strings.Index(elementName, ":")+1:]
+			return localName == testName
+		}
+		return false
+	}
+
+	// Handle qualified names like "prefix:localname"
+	parts := strings.Split(testName, ":")
+	if len(parts) != 2 {
+		return false
+	}
+
+	prefix := parts[0]
+	localName := parts[1]
+
+	// Resolve the namespace URI for the prefix
+	expectedNS := ""
+	if ctx.NamespaceResolver != nil {
+		expectedNS = ctx.NamespaceResolver.LookupNamespaceURI(prefix)
+	}
+
+	// Get the actual namespace URI of the element
+	actualNS := string(node.NamespaceURI())
+
+	// Check namespace and local name match
+	if expectedNS == actualNS {
+		if strings.Contains(elementName, ":") {
+			actualLocal := elementName[strings.Index(elementName, ":")+1:]
+			return actualLocal == localName
+		}
+		return elementName == localName
+	}
+
+	return false
+}
+
+// matchesAttributeName handles attribute name matching with namespace support
+func (nt *xpathNodeTest) matchesAttributeName(node Node, ctx *XPathContext) bool {
+	if node.NodeType() != ATTRIBUTE_NODE {
+		return false
+	}
+
+	attrName := string(node.NodeName())
+	testName := nt.name
+
+	// Handle unqualified names
+	if !strings.Contains(testName, ":") {
+		// Simple name match
+		if attrName == testName || testName == "*" {
+			return true
+		}
+		// Check local name if namespaces are involved
+		if strings.Contains(attrName, ":") {
+			localName := attrName[strings.Index(attrName, ":")+1:]
+			return localName == testName
+		}
+		return false
+	}
+
+	// Handle qualified names like "prefix:localname"
+	parts := strings.Split(testName, ":")
+	if len(parts) != 2 {
+		return false
+	}
+
+	prefix := parts[0]
+	localName := parts[1]
+
+	// Resolve the namespace URI for the prefix
+	expectedNS := ""
+	if ctx.NamespaceResolver != nil {
+		expectedNS = ctx.NamespaceResolver.LookupNamespaceURI(prefix)
+	}
+
+	// Get the actual namespace URI of the attribute
+	actualNS := string(node.NamespaceURI())
+
+	// Check namespace and local name match
+	if expectedNS == actualNS {
+		if strings.Contains(attrName, ":") {
+			actualLocal := attrName[strings.Index(attrName, ":")+1:]
+			return actualLocal == localName
+		}
+		return attrName == localName
+	}
+
+	return false
+}
+
+// matchesQualifiedName handles qualified name matching for any node type
+func (nt *xpathNodeTest) matchesQualifiedName(node Node, ctx *XPathContext) bool {
+	nodeName := string(node.NodeName())
+
+	// Split the test name into prefix and local name
+	testParts := strings.Split(nt.name, ":")
+	if len(testParts) != 2 {
+		return false
+	}
+
+	prefix := testParts[0]
+	localName := testParts[1]
+
+	// Resolve the namespace URI for the prefix
+	expectedNS := ""
+	if ctx.NamespaceResolver != nil {
+		expectedNS = ctx.NamespaceResolver.LookupNamespaceURI(prefix)
+	}
+
+	// Get the actual namespace URI of the node
+	actualNS := string(node.NamespaceURI())
+
+	// Check if namespaces match
+	if expectedNS != actualNS {
+		return false
+	}
+
+	// Check if local names match
+	if strings.Contains(nodeName, ":") {
+		actualLocal := nodeName[strings.Index(nodeName, ":")+1:]
+		return actualLocal == localName
+	}
+
+	return nodeName == localName
 }
 
 func (nt *xpathNodeTest) Name() string {
@@ -1171,4 +1429,19 @@ func (n xpathPredicateNode) Type() XPathNodeType { return XPathNodeTypePredicate
 
 func (n xpathPredicateNode) Evaluate(ctx *XPathContext) (XPathValue, error) {
 	return n.expression.Evaluate(ctx)
+}
+
+// xpathVariableNode represents variable references like $foo
+type xpathVariableNode struct {
+	name string // Variable name without the $ prefix
+}
+
+func (n xpathVariableNode) Type() XPathNodeType { return XPathNodeTypeLiteral }
+
+func (n xpathVariableNode) Evaluate(ctx *XPathContext) (XPathValue, error) {
+	// Look up the variable in the context
+	if value, exists := ctx.VariableBindings[n.name]; exists {
+		return value, nil
+	}
+	return nil, NewXPathError(XPathErrorTypeContext, "Undefined variable: $"+n.name, 0)
 }
