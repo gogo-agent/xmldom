@@ -15,6 +15,77 @@ func NewDecoderFromBytes(data []byte) *Decoder {
 	return NewDecoder(bytes.NewReader(data))
 }
 
+// findStartTagStartOffset scans backward from endOff-1 to find the '<' starting this start-tag
+func findStartTagStartOffset(data []byte, endOff int64) int64 {
+	if endOff > int64(len(data)) { endOff = int64(len(data)) }
+	for i := endOff - 1; i >= 0; i-- {
+		if data[i] == '<' {
+			return i
+		}
+	}
+	return 0
+}
+
+// findStartTagEndOffset scans forward from startOff to the matching '>' outside quotes
+func findStartTagEndOffset(data []byte, startOff int64) int64 {
+	inQuote := byte(0)
+	for i := startOff; i < int64(len(data)); i++ {
+		b := data[i]
+		if inQuote != 0 {
+			if b == inQuote {
+				inQuote = 0
+			}
+			continue
+		}
+		if b == '\'' || b == '"' {
+			inQuote = b
+			continue
+		}
+		if b == '>' {
+			return i
+		}
+	}
+	return startOff
+}
+
+// findAttrNameOffset finds the absolute byte offset of the attribute local name within the start tag [startOff,endOff]
+func findAttrNameOffset(data []byte, startOff, endOff int64, local string) int64 {
+	if startOff < 0 { startOff = 0 }
+	if endOff > int64(len(data)) { endOff = int64(len(data)) }
+	seg := data[startOff:endOff]
+	inQuote := byte(0)
+	name := []byte(local)
+	for i := 0; i+len(name) <= len(seg); i++ {
+		b := seg[i]
+		if inQuote != 0 {
+			if b == inQuote { inQuote = 0 }
+			continue
+		}
+		if b == '\'' || b == '"' {
+			inQuote = b
+			continue
+		}
+		if seg[i] == name[0] && bytes.HasPrefix(seg[i:], name) {
+			// check simple boundary conditions: prev is whitespace or ':' or '<' or start
+			prevOK := i == 0
+			if i > 0 {
+				p := seg[i-1]
+				prevOK = p == ' ' || p == '\t' || p == ':' || p == '<' || p == '\n' || p == '\r'
+			}
+			// next should be '=' or whitespace or ':' (prefix already consumed) or '>'
+			nextOK := true
+			if i+len(name) < len(seg) {
+				n := seg[i+len(name)]
+				nextOK = n == '=' || n == ' ' || n == '\t' || n == ':' || n == '>'
+			}
+			if prevOK && nextOK {
+				return startOff + int64(i)
+			}
+		}
+	}
+	return -1
+}
+
 // Decoder is a struct that decodes a DOM tree from an XML input stream.
 //
 // CDATA Section Limitation:
@@ -42,7 +113,8 @@ type Decoder struct {
 	bufferedToken xml.Token
 
 	// Position tracking
-	sourceText []byte // Original source text for line/column calculation
+	sourceText []byte  // Original source text for line/column calculation
+	lineStarts []int64 // Byte offsets where each line starts (1-based line numbering)
 }
 
 // DecoderOptions allows specifying decoder options.
@@ -83,19 +155,25 @@ func NewDecoderWithOptions(r io.Reader, opts *DecoderOptions) *Decoder {
 		}
 	}
 
-	decoder := &Decoder{
+decoder := &Decoder{
 		d: d,
 	}
 
-	// Try to capture source text for position tracking
+	// Capture full source for position tracking by buffering the reader
 	if bytesReader, ok := r.(*bytes.Reader); ok {
-		// For bytes.Reader, we can capture the entire source
 		pos, _ := bytesReader.Seek(0, io.SeekCurrent)
 		bytesReader.Seek(0, io.SeekStart)
 		sourceText, _ := io.ReadAll(bytesReader)
 		bytesReader.Seek(pos, io.SeekStart)
 		decoder.sourceText = sourceText
+	} else {
+		// Read and re-wrap the reader so xml.Decoder reads from our buffer
+		if data, err := io.ReadAll(r); err == nil {
+			decoder.sourceText = data
+			decoder.d = xml.NewDecoder(bytes.NewReader(data))
+		}
 	}
+	decoder.buildLineIndex()
 
 	return decoder
 }
@@ -146,23 +224,41 @@ func isValidXMLChar(r rune) bool {
 
 // calculateLineColumn calculates the line and column number for a given byte offset
 func (d *Decoder) calculateLineColumn(offset int64) (line, column int) {
-	if len(d.sourceText) == 0 || offset < 0 || int64(len(d.sourceText)) <= offset {
+	if len(d.sourceText) == 0 || offset < 0 || offset > int64(len(d.sourceText)) {
 		return 0, 0
 	}
-
-	line = 1
-	column = 1
-
-	for i := int64(0); i < offset; i++ {
-		if d.sourceText[i] == '\n' {
-			line++
-			column = 1
+	if len(d.lineStarts) == 0 {
+		d.buildLineIndex()
+	}
+	// Binary search for the greatest line start <= offset
+	lo, hi := 0, len(d.lineStarts)-1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		if d.lineStarts[mid] <= offset {
+			lo = mid + 1
 		} else {
-			column++
+			hi = mid - 1
 		}
 	}
-
+	lineIdx := hi
+	if lineIdx < 0 { lineIdx = 0 }
+	line = lineIdx + 1 // 1-based line number
+	colStart := d.lineStarts[lineIdx]
+	column = int(offset-colStart) + 1
 	return line, column
+}
+
+func (d *Decoder) buildLineIndex() {
+	if len(d.sourceText) == 0 { return }
+	d.lineStarts = d.lineStarts[:0]
+	// line 1 starts at offset 0
+	d.lineStarts = append(d.lineStarts, 0)
+	for i := 0; i < len(d.sourceText); i++ {
+		if d.sourceText[i] == '\n' {
+			// next line starts at i+1
+			d.lineStarts = append(d.lineStarts, int64(i+1))
+		}
+	}
 }
 
 // Decode reads the XML from the input stream and returns a Document.
@@ -202,14 +298,20 @@ func (d *Decoder) Decode() (Document, error) {
 				return nil, &ParsingError{Err: err}
 			}
 
-			// Store position information
+// Store position information at start-of-start-tag
 			if elemImpl, ok := elem.(*element); ok {
-				offset := d.d.InputOffset()
-				line, col := d.calculateLineColumn(offset)
-				elemImpl.sourceLineNumber = line
-				elemImpl.sourceColumnNumber = col
-				elemImpl.sourceByteOffset = offset
+				endOff := d.d.InputOffset()
+				startOff := findStartTagStartOffset(d.sourceText, endOff)
+				line, col := d.calculateLineColumn(startOff)
+				elemImpl.sourcePosition = position{
+					Line:   line,
+					Column: col,
+					Offset: startOff,
+				}
 			}
+
+			// Determine start/end of start tag for attribute position mapping
+			endOff := findStartTagEndOffset(d.sourceText, getInternalNode(elem).sourcePosition.Offset)
 
 			// Copy attributes with namespace validation
 			for _, attr := range t.Attr {
@@ -256,6 +358,21 @@ func (d *Decoder) Decode() (Document, error) {
 				if err != nil {
 					return nil, &ParsingError{Err: err}
 				}
+
+				// Set position information for the attribute at the attribute name start, if found
+				if attrNode := elem.GetAttributeNodeNS(DOMString(attr.Name.Space), DOMString(attr.Name.Local)); attrNode != nil {
+					if attrImpl := getInternalNode(attrNode); attrImpl != nil {
+						startOff := getInternalNode(elem).sourcePosition.Offset
+						attrStart := findAttrNameOffset(d.sourceText, startOff, endOff, string(attr.Name.Local))
+						if attrStart >= 0 {
+							line, col := d.calculateLineColumn(attrStart)
+							attrImpl.sourcePosition = position{Line: line, Column: col, Offset: attrStart}
+						} else {
+							// Fallback to element position
+							attrImpl.sourcePosition = getInternalNode(elem).sourcePosition
+						}
+					}
+				}
 			}
 
 			// Append the new element to the parent
@@ -291,6 +408,15 @@ func (d *Decoder) Decode() (Document, error) {
 				}
 			}
 			text := doc.CreateTextNode(DOMString(t))
+
+			// Store position information (start of text token if possible)
+			if textNode := getInternalNode(text); textNode != nil {
+				offEnd := d.d.InputOffset()
+				// Best effort: map to end offset; for exact start, a raw slice length is needed.
+				line, col := d.calculateLineColumn(offEnd)
+				textNode.sourcePosition = position{Line: line, Column: col, Offset: offEnd}
+			}
+
 			parent.AppendChild(text)
 		case xml.Comment:
 			commentText := DOMString(t)
@@ -303,6 +429,14 @@ func (d *Decoder) Decode() (Document, error) {
 				return nil, &ParsingError{Err: fmt.Errorf("comment contains '--'")}
 			}
 			comment := doc.CreateComment(commentText)
+
+			// Store position information (at end of comment token)
+			if commentNode := getInternalNode(comment); commentNode != nil {
+				offEnd := d.d.InputOffset()
+				line, col := d.calculateLineColumn(offEnd)
+				commentNode.sourcePosition = position{Line: line, Column: col, Offset: offEnd}
+			}
+
 			parent.AppendChild(comment)
 		case xml.ProcInst:
 			// The Go XML parser reports the XML declaration as a ProcInst with target "xml".
@@ -319,6 +453,14 @@ func (d *Decoder) Decode() (Document, error) {
 			if err != nil {
 				return nil, &ParsingError{Err: err}
 			}
+
+			// Store position information (at end of PI token)
+			if piNode := getInternalNode(pi); piNode != nil {
+				offEnd := d.d.InputOffset()
+				line, col := d.calculateLineColumn(offEnd)
+				piNode.sourcePosition = position{Line: line, Column: col, Offset: offEnd}
+			}
+
 			parent.AppendChild(pi)
 		case xml.Directive:
 			s := string(t)
@@ -372,6 +514,14 @@ func (d *Decoder) Decode() (Document, error) {
 				if err != nil {
 					return nil, &ParsingError{Err: err}
 				}
+
+				// Store position information for DocumentType (at end of directive)
+				if dtNode := getInternalNode(doctype); dtNode != nil {
+					offEnd := d.d.InputOffset()
+					line, col := d.calculateLineColumn(offEnd)
+					dtNode.sourcePosition = position{Line: line, Column: col, Offset: offEnd}
+				}
+
 				if docImpl, ok := doc.(*document); ok {
 					docImpl.doctype = doctype
 				}

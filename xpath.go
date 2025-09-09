@@ -481,6 +481,9 @@ func (n *xpathNamespaceNode) CompareDocumentPosition(other Node) uint16 {
 	}
 	return n.ownerElement.CompareDocumentPosition(other)
 }
+func (n *xpathNamespaceNode) Position() (line, column int, offset int64) {
+	return n.ownerElement.Position()
+}
 func (n *xpathNamespaceNode) LookupNamespaceURI(prefix DOMString) DOMString         { return "" }
 func (n *xpathNamespaceNode) LookupPrefix(namespaceURI DOMString) DOMString         { return "" }
 func (n *xpathNamespaceNode) IsDefaultNamespace(namespaceURI DOMString) bool        { return false }

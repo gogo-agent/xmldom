@@ -26,6 +26,14 @@ func Marshal(v interface{}) ([]byte, error) {
 	if doc, ok := v.(Document); ok {
 		return marshalDOM(doc)
 	}
+	// Check if v is a DOM Element
+	if elem, ok := v.(Element); ok {
+		return marshalElement(elem)
+	}
+	// Check if v is any DOM Node
+	if node, ok := v.(Node); ok {
+		return marshalNode(node)
+	}
 	// For non-DOM objects, delegate to Go's standard xml.Marshal
 	return xml.Marshal(v)
 }
@@ -47,6 +55,24 @@ func marshalDOM(doc Document) ([]byte, error) {
 		return nil, err
 	}
 
+	return buf.Bytes(), nil
+}
+
+// marshalElement serializes a DOM Element to XML (without XML declaration)
+func marshalElement(elem Element) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := serializeElement(&buf, elem, false); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// marshalNode serializes any DOM Node to XML (without XML declaration)
+func marshalNode(node Node) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := serializeNode(&buf, node); err != nil {
+		return nil, err
+	}
 	return buf.Bytes(), nil
 }
 

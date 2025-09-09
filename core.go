@@ -14,6 +14,14 @@ import (
 // boundary. This is a documented deviation from the specification.
 type DOMString string
 
+// position represents the source position information for a DOM node.
+// It contains the line number, column number, and byte offset in the original source.
+type position struct {
+	Line   int   // 1-based line number
+	Column int   // 1-based column number
+	Offset int64 // Byte offset from the start of the source
+}
+
 type NodeType = uint16
 
 // DOM node type constants
@@ -85,6 +93,9 @@ type NodeFilter interface {
 
 // Node interface represents a node in the DOM tree
 type Node interface {
+	// Position returns the source position information
+	// Returns zero values if position information is not available
+	Position() (line, column int, offset int64)
 	NodeType() NodeType
 	NodeName() DOMString
 	NodeValue() DOMString
@@ -189,9 +200,6 @@ type Element interface {
 	// Element manipulation methods from Living Standard (applicable to XML)
 	ToggleAttribute(name DOMString, force ...bool) bool
 
-	// Position returns the source position information (line, column, offset)
-	// Returns (0, 0, 0) if position information is not available
-	Position() (line, column int, offset int64)
 	Remove()
 	ReplaceWith(nodes ...Node) error
 	Before(nodes ...Node) error
@@ -596,10 +604,8 @@ type node struct {
 	prefix          DOMString
 	localName       DOMString
 
-	// Source position information (set during parsing, 0 if not available)
-	sourceLineNumber   int
-	sourceColumnNumber int
-	sourceByteOffset   int64
+	// Source position information (set during parsing, zero values if not available)
+	sourcePosition position
 }
 
 func (n *node) NodeType() uint16 {
@@ -1557,6 +1563,10 @@ func (n *node) LookupNamespaceURI(prefix DOMString) DOMString {
 	}
 
 	return "" // No namespace URI found
+}
+
+func (n *node) Position() (line, column int, offset int64) {
+	return n.sourcePosition.Line, n.sourcePosition.Column, n.sourcePosition.Offset
 }
 
 func (n *node) TextContent() DOMString {
@@ -4445,10 +4455,54 @@ func (e *element) ChildElementCount() uint32 {
 	return count
 }
 
-// Position returns the source position information (line, column, offset)
-// Returns (0, 0, 0) if position information is not available
+// Position returns the source position information
+// Returns zero values if position information is not available
 func (e *element) Position() (line, column int, offset int64) {
-	return e.sourceLineNumber, e.sourceColumnNumber, e.sourceByteOffset
+	return e.sourcePosition.Line, e.sourcePosition.Column, e.sourcePosition.Offset
+}
+
+func (d *document) Position() (line, column int, offset int64) {
+	return d.sourcePosition.Line, d.sourcePosition.Column, d.sourcePosition.Offset
+}
+
+func (t *text) Position() (line, column int, offset int64) {
+	return t.sourcePosition.Line, t.sourcePosition.Column, t.sourcePosition.Offset
+}
+
+func (c *comment) Position() (line, column int, offset int64) {
+	return c.sourcePosition.Line, c.sourcePosition.Column, c.sourcePosition.Offset
+}
+
+func (pi *processingInstruction) Position() (line, column int, offset int64) {
+	return pi.sourcePosition.Line, pi.sourcePosition.Column, pi.sourcePosition.Offset
+}
+
+func (dt *documentType) Position() (line, column int, offset int64) {
+	return dt.sourcePosition.Line, dt.sourcePosition.Column, dt.sourcePosition.Offset
+}
+
+func (a *attr) Position() (line, column int, offset int64) {
+	return a.sourcePosition.Line, a.sourcePosition.Column, a.sourcePosition.Offset
+}
+
+func (cd *cdataSection) Position() (line, column int, offset int64) {
+	return cd.sourcePosition.Line, cd.sourcePosition.Column, cd.sourcePosition.Offset
+}
+
+func (n *notation) Position() (line, column int, offset int64) {
+	return n.sourcePosition.Line, n.sourcePosition.Column, n.sourcePosition.Offset
+}
+
+func (e *entity) Position() (line, column int, offset int64) {
+	return e.sourcePosition.Line, e.sourcePosition.Column, e.sourcePosition.Offset
+}
+
+func (er *entityReference) Position() (line, column int, offset int64) {
+	return er.sourcePosition.Line, er.sourcePosition.Column, er.sourcePosition.Offset
+}
+
+func (df *documentFragment) Position() (line, column int, offset int64) {
+	return df.sourcePosition.Line, df.sourcePosition.Column, df.sourcePosition.Offset
 }
 
 // ===========================================================================
@@ -4670,6 +4724,10 @@ func (cd *characterData) Remove() {
 	if parent := cd.ParentNode(); parent != nil {
 		parent.RemoveChild(cd)
 	}
+}
+
+func (cd *characterData) Position() (line, column int, offset int64) {
+	return cd.sourcePosition.Line, cd.sourcePosition.Column, cd.sourcePosition.Offset
 }
 
 // ===========================================================================
